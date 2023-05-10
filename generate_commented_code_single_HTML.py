@@ -49,7 +49,7 @@ def commented_main(summary_output_path="commented_code_output"):
     html_output = f"<html><head><title>Commented Code</title></head><body><h1>Commented Code</h1>{html_content}</body></html>"
 
     try:
-        with open("commented_code.html", "w", encoding="utf-8") as output_file:
+        with open("example_output/commented_code.html", "w", encoding="utf-8") as output_file:
             output_file.write(html_output)
         logging.info("Generated commented code summary")
     except Exception as e:

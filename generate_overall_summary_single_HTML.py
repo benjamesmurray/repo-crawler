@@ -76,7 +76,7 @@ def main(summary_output_path="summary_output"):
     html_output = f"<html><head><title>Project Summary</title></head><body><h1>Project Summary</h1>{html_content}</body></html>"
 
     try:
-        with open("overall_summary.html", "w", encoding="utf-8") as output_file:
+        with open("example_output/overall_summary.html", "w", encoding="utf-8") as output_file:
             output_file.write(html_output)
         logging.info("Generated overall summary")
     except Exception as e:
