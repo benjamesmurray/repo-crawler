@@ -166,8 +166,7 @@ def is_response_incomplete(response: str) -> bool:
 def generate_comments(chunk_text):
     if len(chunk_text.strip()) == 0 or len(chunk_text) < 10:
         print("Chunk content is empty or too small to generate a meaningful summary.")
-        empty_summary = {key: {} if key in {"Classes", "Functions/Methods", "Configuration/Environment Variables"} else "" for key in required_keys}
-        return empty_summary
+        return chunk_text
 
     prompt = (
         "Supply a fully commented version of the code below. "
@@ -179,7 +178,7 @@ def generate_comments(chunk_text):
     )
 
     retries = 3
-    max_tokens = 2500
+    max_tokens = 8000
     retry_wait = 1  # Initial waiting time in seconds
     retry_factor = 2  # Exponential backoff factor
 
@@ -188,7 +187,7 @@ def generate_comments(chunk_text):
 
         try:
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model="gpt-3.5-turbo-16k",
                 messages=[
                     {
                         "role": "system",
@@ -250,7 +249,7 @@ def process_chunks(content, tokenizer, generate_comments):
     avg_chars_per_token = calculate_avg_chars_per_token(content_sample, tokenizer)
     print(f"Average characters per token: {avg_chars_per_token}")
 
-    max_chunk_size = 4096 - 2550  # Reserve 2550 tokens for the model's response
+    max_chunk_size = 16384 - 8000  # Reserve 2550 tokens for the model's response
     print(f"Max chunk size: {max_chunk_size}")
 
     # Calculate the maximum number of characters per chunk

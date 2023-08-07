@@ -288,13 +288,13 @@ def generate_summary(chunk_text):
     )
 
     retries = 5
-    max_tokens = 900
+    max_tokens = 2000
     while retries > 0:
         print(f"Retries left: {retries}")
 
         try:
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model="gpt-3.5-turbo-16k",
                 messages=[
                     {
                         "role": "system",
@@ -440,7 +440,7 @@ def process_chunks(content, tokenizer):
     avg_chars_per_token = calculate_avg_chars_per_token(content_sample, tokenizer)
     print(f"Average characters per token: {avg_chars_per_token}")
 
-    max_chunk_size = 4096 - 1050  # Reserve 950 tokens for the model's response
+    max_chunk_size = 16384 - 2000  # Reserve 2000 tokens for the model's response
     print(f"Max chunk size: {max_chunk_size}")
 
     # Calculate the maximum number of characters per chunk

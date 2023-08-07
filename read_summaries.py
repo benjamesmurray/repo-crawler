@@ -20,6 +20,7 @@ def read_summaries(output_folder):
                         current_level[part] = {}
                     current_level = current_level[part]
 
-                current_level[path_parts[-1]] = summary
+                current_level[filename] = summary  # keep filename with extension
 
     return summaries
+
