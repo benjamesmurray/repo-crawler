@@ -31,16 +31,17 @@ def generate_html(summaries, depth=0, prefix=""):
                 html += "<ul>"
                 for subkey, subvalue in value.items():
                     if isinstance(subvalue, dict):
-                        html += f"<li><a href='#{prefix}{key}{os.path.sep}{subkey}'>{subkey}</a></li>"
+                        html += f"<li><a href='#{prefix}{key}{os.path.sep}{subkey}'>{prefix}{key}{os.path.sep}{subkey}</a></li>"
                 html += "</ul>"
 
                 # Generate file links
                 html += "<ul>"
                 for subkey, subvalue in value.items():
                     if isinstance(subvalue, str):
-                        html += f"<li><a href='#{prefix}{key}{os.path.sep}{subkey}'>{subkey}</a></li>"
+                        html += f"<li><a href='#{prefix}{key}{os.path.sep}{subkey}'>{prefix}{key}{os.path.sep}{subkey}</a></li>"
                 html += "</ul>"
-            # Generate file contents
+
+            # Recursive call to generate contents for subdirectories and files
             html += generate_html(value, depth + 1, f"{prefix}{key}{os.path.sep}")
 
     return html
