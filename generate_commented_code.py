@@ -1,6 +1,6 @@
 import os
 import logging
-import openai
+from openai import OpenAI
 import re
 import time
 import random
@@ -8,32 +8,22 @@ import traceback
 from git import Repo
 from transformers import GPT2Tokenizer
 
+api_key = os.getenv('OPENAI_API_KEY')
+if not api_key:
+    raise ValueError("Please set the OPENAI_API_KEY environment variable.")
+
+# Then, initialize the OpenAI client with the API key
+client = OpenAI(api_key=api_key)
+
 gpt2_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
 
-def calculate_avg_chars_per_token(text, tokenizer, max_tokens=1024, estimated_ratio=2.5):
-    # Print input values and tokenizer object
-    # print("Text:", text)
-    print("Tokenizer:", tokenizer)
-    print("Max tokens:", max_tokens)
-    print("Estimated ratio:", estimated_ratio)
-
-    # Tokenize the input text
+def calculate_avg_chars_per_token(text, tokenizer):
     tokens = tokenizer.tokenize(text)
-
-    # Calculate the average number of characters per token
-    if len(tokens) == 0:
-        print("Warning: No tokens found in the text. Returning default value.")
-        return estimated_ratio  # return the estimated_ratio or another default value
-
+    if not tokens:
+        return 2.5  # Default estimated ratio if no tokens found
     avg_chars_per_token = len(text) / len(tokens)
-
-    print(f"Total characters: {len(text)}, Total tokens: {len(tokens)}")  # Add this print statement
-
-    # Reduce the calculated average by 25% to provide some allowance
-    reduced_avg_chars_per_token = avg_chars_per_token * 0.75
-
-    return reduced_avg_chars_per_token
+    return avg_chars_per_token * 0.75  # Apply a reduction factor for safety margin
 
 
 def contains_test_keyword(name):
@@ -67,57 +57,26 @@ def clone_repo(repo_url, local_path):
 
 
 def process_files(repo_path, output_folder, tokenizer):
-    print("Entering process_files function")
     python_files = get_python_files(repo_path)
-
-    logging.info(f"Found {len(python_files)} Python files to process.")
-    print(f"Found {len(python_files)} Python files to process.")
-
-    for index, file_path in enumerate(python_files, 1):
-        logging.info(f"Processing file {index}/{len(python_files)}: {file_path}")
-        print(f"Processing file {index}/{len(python_files)}: {file_path}")
-
+    for file_path in python_files:
         try:
             content = read_file_content(file_path)
-
-            print("Processing file content...")
-            comments = process_chunks(content, tokenizer, generate_comments)
-            print("Processing file content complete.")
-
-            if len(comments) == 1:
-                print("Only one chunk of comments generated. Using it as the output.")
-                reconstructed_comments = comments[0]
-            else:
-                print("Reconstructing comments...")
-                try:
-                    reconstructed_comments = reconstruct_comments(comments)
-                except Exception as e:
-                    print("Error occurred in reconstruct_comments function:")
-                    print(traceback.format_exc())
-                    raise e
-                print("Reconstruction complete.")
-
-            print("Reconstructed comments:\n", reconstructed_comments)
-
-            output_file_path = save_commented_file(output_folder, repo_path, file_path, reconstructed_comments)
-
-            logging.info(f"Generated comments for {file_path} and saved to {output_file_path}")
-            print(f"Generated comments for {file_path} and saved to {output_file_path}")
-
+            chunks = chunk_content(content, tokenizer)
+            comments = []  # Initialize an empty list to collect comments
+            for chunk in chunks:
+                comment = generate_comments(chunk)  # Assuming this function returns the generated comment for a chunk
+                comments.append(comment)
+            combined_comments = "\n".join(comments)  # Combine all comments into a single string
+            save_commented_file(output_folder, repo_path, file_path, combined_comments)  # Pass combined comments here
         except Exception as e:
-
             logging.error(f"Error processing file {file_path}: {e}")
 
-            print(f"Error processing file {file_path}: {e}")
-
-            print(traceback.format_exc())  # Add this line to print the traceback
 
 
 def generate_commented_code(repo_url, local_path, api_key, output_folder):
     print("Entering generate_summaries function")
 
     # Set up your OpenAI API key
-    openai.api_key = api_key
 
     # Set up logging
     logging.basicConfig(
@@ -135,13 +94,20 @@ def generate_commented_code(repo_url, local_path, api_key, output_folder):
     print("Finished processing files")
 
 
-def chunk_content(file_content, max_tokens):
-    tokens = gpt2_tokenizer.encode(file_content)
-    chunks = []
-    for i in range(0, len(tokens), max_tokens):
-        chunk = gpt2_tokenizer.decode(tokens[i:i + max_tokens], skip_special_tokens=True)
-        chunks.append(chunk)
-    return chunks
+def chunk_content(file_content, tokenizer):
+    avg_chars_per_token = calculate_avg_chars_per_token(file_content[:5000], tokenizer)
+    # Consider both the chunk of code and potential comments within 2500 tokens
+    estimated_max_chunk_size_in_tokens = 2500  # Reflects max_tokens for API calls
+    max_chars_per_chunk = (estimated_max_chunk_size_in_tokens) * avg_chars_per_token
+    content_chunks = []
+    start_idx = 0
+    while start_idx < len(file_content):
+        end_idx = min(start_idx + max_chars_per_chunk, len(file_content))
+        if end_idx < len(file_content):
+            end_idx = file_content.rfind('\n', start_idx, end_idx) + 1 or end_idx
+        content_chunks.append(file_content[start_idx:end_idx])
+        start_idx = end_idx
+    return content_chunks
 
 
 def get_sample(content, sample_size):
@@ -169,16 +135,14 @@ def generate_comments(chunk_text):
         return chunk_text
 
     prompt = (
-        "Supply a fully commented version of the code below. "
-        "If the existing comments are sufficient, do not add any more comments. "
-        "If necessary, improve existing comments or add new comments to provide clear, "
-        "concise, and informative explanations.\n\n"
+        "Your task is to generate a documented version of the given code snippet using docstrings. The docstring should be interspersed with the original code for real-time explanations. "
+        "For each function or method or class, add a succinct docstring above it explaining its purpose, input parameters, and expected output.\n\n"
         f"{chunk_text}\n"
-        "Important: Comment the code without modifying the original code."
+        "Note: The response must be the original code plus your appropriately placed docstrings. No explanatory text."
     )
 
     retries = 3
-    max_tokens = 8000
+    max_tokens = 2500
     retry_wait = 1  # Initial waiting time in seconds
     retry_factor = 2  # Exponential backoff factor
 
@@ -186,21 +150,19 @@ def generate_comments(chunk_text):
         print(f"Retries left: {retries}")
 
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo-16k",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a helpful assistant."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=max_tokens,
-                n=1,
-                temperature=0.5,
-            )
+            response = client.chat.completions.create(model="gpt-4-1106-preview",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful assistant."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=max_tokens,
+            n=1,
+            temperature=0.5)
             print("[2] API call successful.")
         except Exception as e:
             print("[2] Error during API call:", e)
@@ -214,7 +176,7 @@ def generate_comments(chunk_text):
                 raise Exception(f"API call error: {e}")
 
         print(f"Response: {response}")  # Add this line to print the response
-        summary = response.choices[0]["message"]["content"].strip()  # Update this line
+        summary = response.choices[0].message.content.strip()  # Update this line
         print(f"Attempt {4 - retries} summary:\n{summary}")
 
         return summary
@@ -227,7 +189,6 @@ def reconstruct_comments(comment_list):
         for line in lines:
             reconstructed_comments.append(line)
     return "\n".join(reconstructed_comments)
-
 
 
 def read_file_content(file_path):
@@ -249,7 +210,7 @@ def process_chunks(content, tokenizer, generate_comments):
     avg_chars_per_token = calculate_avg_chars_per_token(content_sample, tokenizer)
     print(f"Average characters per token: {avg_chars_per_token}")
 
-    max_chunk_size = 16384 - 8000  # Reserve 2550 tokens for the model's response
+    max_chunk_size = 128000 - 4000
     print(f"Max chunk size: {max_chunk_size}")
 
     # Calculate the maximum number of characters per chunk

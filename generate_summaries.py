@@ -1,55 +1,38 @@
-import os
-import logging
-import openai
 import json
 import re
 import traceback
+import os
+import logging
+import openai
 from git import Repo
 from transformers import GPT2Tokenizer
 
 gpt2_tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
 
-def calculate_avg_chars_per_token(text, tokenizer, max_tokens=1024, estimated_ratio=2.5):
-    # Print input values and tokenizer object
-    # print("Text:", text)
-    print("Tokenizer:", tokenizer)
-    print("Max tokens:", max_tokens)
-    print("Estimated ratio:", estimated_ratio)
+def generate_summaries(repo_url, local_path, output_folder, model_name, max_tokens_for_prompt, max_tokens_for_response,
+                       max_chunk_size, chunk_sample_size):
+    print("Entering generate_summaries function")
 
-    # Tokenize the input text
-    tokens = tokenizer.tokenize(text)
+    # Fetch the API key from environment variables
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("No OpenAI API key provided. Please set the OPENAI_API_KEY environment variable.")
 
-    # Calculate the average number of characters per token
-    if len(tokens) == 0:
-        print("Warning: No tokens found in the text. Returning default value.")
-        return estimated_ratio  # return the estimated_ratio or another default value
+    # Use the API key to configure OpenAI
+    openai.api_key = api_key
 
-    avg_chars_per_token = len(text) / len(tokens)
+    # Set up logging
+    logging.basicConfig(filename="app.log", level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
-    print(f"Total characters: {len(text)}, Total tokens: {len(tokens)}")  # Add this print statement
+    # Clone the GitHub repo to a local directory
+    clone_repo(repo_url, local_path)
 
-    # Reduce the calculated average by 25% to provide some allowance
-    reduced_avg_chars_per_token = avg_chars_per_token * 0.75
-
-    return reduced_avg_chars_per_token
-
-
-def contains_test_keyword(name):
-    test_keywords = {"test", "tests"}
-    return any(keyword.lower() in name.lower() for keyword in test_keywords)
-
-
-def get_python_files(repo_path):
-    python_files = []
-    for root, _, files in os.walk(repo_path):
-        for file in files:
-            if file.endswith(".py") and not contains_test_keyword(file):
-                file_path = os.path.join(root, file)
-                print(f"Found Python file: {file_path}")
-                python_files.append(file_path)
-                print(f"Appending file {file_path} to the list")
-    return python_files
+    # Generate summaries for the files
+    print("Starting to process files...")
+    process_files(local_path, output_folder, gpt2_tokenizer, chunk_sample_size, max_chunk_size, model_name,
+                  max_tokens_for_response)
+    print("Finished processing files")
 
 
 def clone_repo(repo_url, local_path):
@@ -65,7 +48,43 @@ def clone_repo(repo_url, local_path):
         )
 
 
-def process_files(repo_path, output_folder, tokenizer):
+def get_python_files(repo_path):
+    python_files = []
+    for root, _, files in os.walk(repo_path):
+        for file in files:
+            if file.endswith(".py") and not contains_test_keyword(file):
+                file_path = os.path.join(root, file)
+                print(f"Found Python file: {file_path}")
+                python_files.append(file_path)
+                print(f"Appending file {file_path} to the list")
+    return python_files
+
+
+def read_file_content(file_path):
+    with open(file_path, 'r', encoding='utf-8') as file:
+        content = file.read()
+    return content
+
+
+def save_summary(output_folder, repo_path, file_path, summary):
+    # Get the relative path of the file with respect to the local repository path
+    relative_path = os.path.relpath(file_path, repo_path)
+
+    # Replace the .py extension with .txt for the summary file
+    summary_filename = f"{os.path.splitext(relative_path)[0]}.txt"
+
+    # Create the corresponding folder structure inside the output folder
+    output_file_path = os.path.join(output_folder, summary_filename)
+    os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+
+    with open(output_file_path, 'w', encoding='utf-8') as summary_file:
+        summary_file.write(summary)
+
+    print(f"Summary for {file_path} saved at {output_file_path}")
+    return output_file_path
+
+
+def process_files(repo_path, output_folder, tokenizer, chunk_sample_size, max_chunk_size, model_name, max_tokens_for_response):
     print("Entering process_files function")
     python_files = get_python_files(repo_path)
 
@@ -80,7 +99,8 @@ def process_files(repo_path, output_folder, tokenizer):
             content = read_file_content(file_path)
 
             print("Processing file content...")
-            summaries = process_chunks(content, tokenizer)
+            summaries = process_chunks(content, tokenizer, chunk_sample_size, max_chunk_size, model_name,
+                                       max_tokens_for_response)
             print("Processing file content complete.")
 
             if len(summaries) == 1:
@@ -108,129 +128,60 @@ def process_files(repo_path, output_folder, tokenizer):
             logging.error(f"Error processing file {file_path}: {e}")
 
 
-def generate_summaries(repo_url, local_path, api_key, output_folder):
-    print("Entering generate_summaries function")
+def process_chunks(content, tokenizer, chunk_sample_size, max_chunk_size, model_name, max_tokens_for_response):
+    print("Entered process_chunks function")
 
-    # Set up your OpenAI API key
-    openai.api_key = api_key
+    # Extract a sample from the content
+    sample_size=chunk_sample_size  # You can adjust this value in main.py
+    content_sample = content[:sample_size]
+    # print("Extracted content sample:", content_sample)
 
-    # Set up logging
-    logging.basicConfig(
-        filename="app.log",
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s: %(message)s",
-    )
+    # Calculate the average characters per token for the sample
+    print("Calling calculate_avg_chars_per_token function")
+    avg_chars_per_token = calculate_avg_chars_per_token(content_sample, tokenizer)
+    print(f"Average characters per token: {avg_chars_per_token}")
 
-    # Clone the GitHub repo to a local directory
-    clone_repo(repo_url, local_path)
+    max_chunk_size=max_chunk_size
+    print(f"Max chunk size: {max_chunk_size}")
 
-    # Generate summaries for the files
-    print("Starting to process files...")
-    process_files(local_path, output_folder, gpt2_tokenizer)
-    print("Finished processing files")
+    # Calculate the maximum number of characters per chunk
+    max_chars_per_chunk = int(max_chunk_size * avg_chars_per_token)
 
+    # Split the content into chunks based on the maximum number of characters per chunk
+    content_chunks = []
+    start_idx = 0
 
-def chunk_content(file_content, max_tokens):
-    tokens = gpt2_tokenizer.encode(file_content)
-    chunks = []
-    for i in range(0, len(tokens), max_tokens):
-        chunk = gpt2_tokenizer.decode(tokens[i:i + max_tokens])
-        chunks.append(chunk)
-    return chunks
+    while start_idx < len(content):
+        end_idx = start_idx + max_chars_per_chunk
 
+        # Find the closest word or paragraph boundary (whitespace or newline character)
+        while end_idx < len(content) and content[end_idx] not in {'\n', ' '}:
+            end_idx -= 1
 
-def get_sample(content, sample_size):
-    content_length = len(content)
-    if content_length <= sample_size:
-        return content
+        chunk = content[start_idx:end_idx]
+        content_chunks.append(chunk)
+        start_idx = end_idx
 
-    start_index = (content_length // 2) - (sample_size // 2)
-    end_index = start_index + sample_size
-    return content[start_index:end_index]
+    print(f"Number of chunks: {len(content_chunks)}")
 
+    summaries = []
+    for chunk in content_chunks:
+        print("Processing chunk for summary generation...")
+        summary = generate_summary(chunk, model_name, max_tokens_for_response)
+        print("Summary generation complete for this chunk.")
+        summaries.append(summary)
 
-def validate_summary(summary):
-    def is_empty_string(s):
-        return isinstance(s, str) and s.strip() == ""
-
-    print(f"Received summary: {summary}")
-    valid_keys = [
-        "Overall Summary",
-        "Module/Library Name",
-        "Classes",
-        "Functions/Methods",
-        "Data Structures",
-        "Interfaces/APIs",
-        "Configuration/Environment Variables",
-        "Error Handling/Logging",
-        "Data Inputs",
-        "Data Outputs"
-    ]
-
-    invalid_keys = [key for key in summary if key not in valid_keys]
-    if invalid_keys:
-        print(f"Invalid keys in summary: {invalid_keys}")
-        return False
-
-    invalid_types = []
-    for key, value in summary.items():
-        if not (isinstance(value, dict) or isinstance(value, str)):
-            invalid_types.append(key)
-        elif is_empty_string(value):
-            continue
-        elif isinstance(value, str) and is_empty_string(value):
-            invalid_types.append(key)
-
-    if invalid_types:
-        print(f"Invalid types in summary: {invalid_types}")
-        return False
-
-    print("Summary is valid")
-    return True
+    return summaries
 
 
-def empty_json_structure():
-    return {
-        "Overall Summary": "",
-        "Module/Library Name": "",
-        "Classes": {},
-        "Functions/Methods": {},
-        "Data Structures": "",
-        "Interfaces/APIs": "",
-        "Configuration/Environment Variables": {},
-        "Error Handling/Logging": "",
-        "Data Inputs": "",
-        "Data Outputs": ""
-    }
-
-
-def is_response_incomplete(response: str) -> bool:
-    print("Calling is_response_incomplete() function...")
-    print(f"Analyzing response: {response}")
-
-    # Remove newline characters and white spaces outside of string values
-    response = re.sub(r'(?<=\})\s+|\s+(?=\{)', '', response)
-
-    if not response:
-        return False
-
-    # Check if the response is missing a closing curly brace
-    if response[-1] != '}':
-        return True
-
-    # Check if the response has an equal number of opening and closing curly braces
-    if response.count('{') != response.count('}'):
-        return True
-
-    return False
-
-
-def generate_summary(chunk_text):
+def generate_summary(chunk_text, model_name, max_tokens):
     required_keys = [
         "Overall Summary",
         "Module/Library Name",
+        "ETL Processes",
         "Classes",
         "Functions/Methods",
+        "Variables",
         "Data Structures",
         "Interfaces/APIs",
         "Configuration/Environment Variables",
@@ -252,8 +203,43 @@ def generate_summary(chunk_text):
         '{\n'
         '  "Overall Summary": "A brief summary of the code snippet...",\n'
         '  "Module/Library Name": "ExampleLib",\n'
-        '  "Classes": {"ExampleClass": "A class that..."},\n'
-        '  "Functions/Methods": {"example_function": "A function that..."},\n'
+        '  "ETL Processes": {\n'
+        '    "Extract": {\n'
+        '      "Description": "Details of the data extraction process...",\n'
+        '      "Data Sources": ["Source1", "Source2"],\n'
+        '      "Methods": {"extract_method": "Description of extraction method..."}\n'
+        '    },\n'
+        '    "Transform": {\n'
+        '      "Description": "Details of data transformation process...",\n'
+        '      "Transformations": {"transformation1": "Description of transformation..."},\n'
+        '      "Dependencies": ["DependentClass/Function"],\n'
+        '      "Used By": ["OtherTransformations/Processes"]\n'
+        '    },\n'
+        '    "Load": {\n'
+        '      "Description": "Details of the data loading process...",\n'
+        '      "Data Destinations": ["Destination1", "Destination2"],\n'
+        '      "Methods": {"load_method": "Description of loading method..."}\n'
+        '    }\n'
+        '  },\n'
+        '  "Classes": {\n'
+        '    "ExampleClass": {\n'
+        '      "Description": "A class that...",\n'
+        '      "Properties": {"prop1": "Description of prop1..."},\n'
+        '      "Methods": {"method1": "Description of method1..."},\n'
+        '      "Dependencies": ["OtherClass"],\n'
+        '      "Used By": ["YetAnotherClass"]\n'
+        '    }\n'
+        '  },\n'
+        '  "Functions/Methods": {\n'
+        '    "example_function": {\n'
+        '      "Description": "A function that...",\n'
+        '      "Parameters": ["param1", "param2"],\n'
+        '      "Returns": "Return type and/or description...",\n'
+        '      "Calls": ["another_function"],\n'
+        '      "Called By": ["some_function"]\n'
+        '    }\n'
+        '  },\n'
+        '  "Variables": {"variable1": "Description and type of variable1..."},\n'
         '  "Data Structures": "Lists, dictionaries...",\n'
         '  "Interfaces/APIs": "REST API endpoints...",\n'
         '  "Configuration/Environment Variables": {"EXAMPLE_VAR": "A variable that..."},\n'
@@ -263,23 +249,29 @@ def generate_summary(chunk_text):
         '}\n\n'
         "1. Overall Summary: Provide a brief summary of the code snippet.\n"
         "2. Module/Library Name: Provide the name of the module or library used in the file.\n"
-        "3. Classes: Briefly describe the purpose, properties, and methods for each class in the file, "
+        "3. ETL Processes: \n"
+        "   a. Extract: Describe the data extraction methods, their sources, and any relevant details.\n"
+        "   b. Transform: Describe the transformation logic, any dependencies, and entities that use these transformations.\n"
+        "   c. Load: Describe how and where the data is loaded, including methods and destinations.\n"
+        "4. Classes: Briefly describe the purpose, properties, and methods for each class in the file, "
         "including inheritance and composition relationships, if applicable.\n"
-        "4. Functions/Methods: Briefly describe each function or method in the file, "
+        "5. Functions/Methods: Briefly describe each function or method in the file, "
         "including input parameters, return values, and any side effects. "
         "Document any significant algorithms or logic used within the functions.\n"
-        "5. Data Structures: Describe the key data structures used in the file, "
+        "6. Variables: Describe each variable in the file, including its type, purpose, "
+        "and any functions or methods that access or modify it.\n"
+        "7. Data Structures: Describe the key data structures used in the file, "
         "such as lists, dictionaries, or custom data structures, and their purposes. "
         "Include any significant relationships or interactions between these structures.\n"
-        "6. Interfaces/APIs: If the file exposes any APIs or interfaces for integration with other systems, "
+        "8. Interfaces/APIs: If the file exposes any APIs or interfaces for integration with other systems, "
         "document their endpoints, input and output formats, and any authentication or authorization requirements.\n"
-        "7. Configuration/Environment Variables: List any configuration files or environment variables "
+        "9. Configuration/Environment Variables: List any configuration files or environment variables "
         "required for the file, and describe their purposes and possible values.\n"
-        "8. Error Handling/Logging: Explain the error handling and logging mechanisms used in the file, "
+        "10. Error Handling/Logging: Explain the error handling and logging mechanisms used in the file, "
         "including any specific error codes or messages that developers should be aware of.\n"
-        "9. Data Inputs: Describe the data inputs for the file, including any file formats, "
+        "11. Data Inputs: Describe the data inputs for the file, including any file formats, "
         "data sources, or user input requirements.\n"
-        "10. Data Outputs: Describe the data outputs for the file, including any file formats, "
+        "12. Data Outputs: Describe the data outputs for the file, including any file formats, "
         "data destinations, or user output requirements.\n\n"
         f"{chunk_text}\n"
         "Important: Summarize the content without using any part of the original code. "
@@ -288,52 +280,50 @@ def generate_summary(chunk_text):
     )
 
     retries = 5
-    max_tokens = 2000
+    max_tokens=max_tokens
     while retries > 0:
         print(f"Retries left: {retries}")
 
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo-16k",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a helpful assistant that only supplies responses in JSON structures."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=max_tokens,
-                n=1,
-                temperature=0.5,
-            )
+            response = openai.chat.completions.create(model=model_name,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful assistant that only supplies responses in JSON structures."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=max_tokens,
+            n=1,
+            temperature=0.5)
             print("[2] API call successful.")
         except Exception as e:
             print("[2] Error during API call:", e)
             raise Exception(f"API call error: {e}")
 
-        summary = response['choices'][0]['message']['content'].strip()
+        summary = response.choices[0].message.content.strip()
         print(f"Attempt {6 - retries} summary:\n{summary}")
 
         json_pattern = re.compile(r'(?s)\{.*}')
         json_match = json_pattern.search(summary)
         if json_match:
             json_text = json_match.group()
-            print("Matched JSON text:")  # New print statement
-            print(json_text)  # New print statement
+            print("Matched JSON text:")
+            print(json_text)
         else:
             print("No JSON text found in the summary.")
             json_text = ""
 
         try:
-            summary_dict = json.loads(json_text)  # Changed from 'summary' to 'json_text'
+            summary_dict = json.loads(json_text)
         except json.JSONDecodeError as e:
             print(f"Error decoding JSON: {e}")
             summary_dict = {}
 
-        print("JSON dictionary after loading:")  # New print statement
-        print(summary_dict)  # New print statement
+        print("JSON dictionary after loading:")
+        print(summary_dict)
 
         if summary_dict:
             print("Sending the following JSON dictionary to the validate_summary function:")
@@ -354,7 +344,7 @@ def generate_summary(chunk_text):
                 else:
                     print("[4.3] Summary validation failed, retrying...")
 
-                retries -= 1  # Move the retries decrement outside of the else block
+                retries -= 1
         else:
             print("[3] Empty summary received, retrying...")
             retries -= 1
@@ -421,71 +411,128 @@ def reconstruct_summaries(summaries):
     return reconstructed_summary
 
 
-def read_file_content(file_path):
-    with open(file_path, 'r', encoding='utf-8') as file:
-        content = file.read()
-    return content
+def calculate_avg_chars_per_token(text, tokenizer, max_tokens=1024, estimated_ratio=2.5):
+    # Print input values and tokenizer object
+    # print("Text:", text)
+    print("Tokenizer:", tokenizer)
+    print("Max tokens:", max_tokens)
+    print("Estimated ratio:", estimated_ratio)
+
+    # Tokenize the input text
+    tokens = tokenizer.tokenize(text)
+
+    # Calculate the average number of characters per token
+    if len(tokens) == 0:
+        print("Warning: No tokens found in the text. Returning default value.")
+        return estimated_ratio  # return the estimated_ratio or another default value
+
+    avg_chars_per_token = len(text) / len(tokens)
+
+    print(f"Total characters: {len(text)}, Total tokens: {len(tokens)}")  # Add this print statement
+
+    # Reduce the calculated average by 25% to provide some allowance
+    reduced_avg_chars_per_token = avg_chars_per_token * 0.75
+
+    return reduced_avg_chars_per_token
 
 
-def process_chunks(content, tokenizer):
-    print("Entered process_chunks function")
-
-    # Extract a sample from the content
-    sample_size = 2500  # You can adjust this value
-    content_sample = content[:sample_size]
-    # print("Extracted content sample:", content_sample)
-
-    # Calculate the average characters per token for the sample
-    print("Calling calculate_avg_chars_per_token function")
-    avg_chars_per_token = calculate_avg_chars_per_token(content_sample, tokenizer)
-    print(f"Average characters per token: {avg_chars_per_token}")
-
-    max_chunk_size = 16384 - 2000  # Reserve 2000 tokens for the model's response
-    print(f"Max chunk size: {max_chunk_size}")
-
-    # Calculate the maximum number of characters per chunk
-    max_chars_per_chunk = int(max_chunk_size * avg_chars_per_token)
-
-    # Split the content into chunks based on the maximum number of characters per chunk
-    content_chunks = []
-    start_idx = 0
-
-    while start_idx < len(content):
-        end_idx = start_idx + max_chars_per_chunk
-
-        # Find the closest word or paragraph boundary (whitespace or newline character)
-        while end_idx < len(content) and content[end_idx] not in {'\n', ' '}:
-            end_idx -= 1
-
-        chunk = content[start_idx:end_idx]
-        content_chunks.append(chunk)
-        start_idx = end_idx
-
-    print(f"Number of chunks: {len(content_chunks)}")
-
-    summaries = []
-    for chunk in content_chunks:
-        print("Processing chunk for summary generation...")
-        summary = generate_summary(chunk)
-        print("Summary generation complete for this chunk.")
-        summaries.append(summary)
-
-    return summaries
+def contains_test_keyword(name):
+    test_keywords = {"test", "tests"}
+    return any(keyword.lower() in name.lower() for keyword in test_keywords)
 
 
-def save_summary(output_folder, repo_path, file_path, summary):
-    # Get the relative path of the file with respect to the local repository path
-    relative_path = os.path.relpath(file_path, repo_path)
+def chunk_content(file_content, max_tokens):
+    tokens = gpt2_tokenizer.encode(file_content)
+    chunks = []
+    for i in range(0, len(tokens), max_tokens):
+        chunk = gpt2_tokenizer.decode(tokens[i:i + max_tokens])
+        chunks.append(chunk)
+    return chunks
 
-    # Replace the .py extension with .txt for the summary file
-    summary_filename = f"{os.path.splitext(relative_path)[0]}.txt"
 
-    # Create the corresponding folder structure inside the output folder
-    output_file_path = os.path.join(output_folder, summary_filename)
-    os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+def get_sample(content, sample_size):
+    content_length = len(content)
+    if content_length <= sample_size:
+        return content
 
-    with open(output_file_path, 'w', encoding='utf-8') as summary_file:
-        summary_file.write(summary)
+    start_index = (content_length // 2) - (sample_size // 2)
+    end_index = start_index + sample_size
+    return content[start_index:end_index]
 
-    print(f"Summary for {file_path} saved at {output_file_path}")
-    return output_file_path
+
+def validate_summary(summary):
+    def is_empty_string(s):
+        return isinstance(s, str) and s.strip() == ""
+
+    print(f"Received summary: {summary}")
+    valid_keys = [
+        "Overall Summary",
+        "Module/Library Name",
+        "ETL Processes",
+        "Classes",
+        "Functions/Methods",
+        "Variables",
+        "Data Structures",
+        "Interfaces/APIs",
+        "Configuration/Environment Variables",
+        "Error Handling/Logging",
+        "Data Inputs",
+        "Data Outputs"
+    ]
+
+    invalid_keys = [key for key in summary if key not in valid_keys]
+    if invalid_keys:
+        print(f"Invalid keys in summary: {invalid_keys}")
+        return False
+
+    invalid_types = []
+    for key, value in summary.items():
+        if not (isinstance(value, dict) or isinstance(value, str)):
+            invalid_types.append(key)
+        elif is_empty_string(value):
+            continue
+        elif isinstance(value, str) and is_empty_string(value):
+            invalid_types.append(key)
+
+    if invalid_types:
+        print(f"Invalid types in summary: {invalid_types}")
+        return False
+
+    print("Summary is valid")
+    return True
+
+
+def empty_json_structure():
+    return {
+        "Overall Summary": "",
+        "Module/Library Name": "",
+        "Classes": {},
+        "Functions/Methods": {},
+        "Data Structures": "",
+        "Interfaces/APIs": "",
+        "Configuration/Environment Variables": {},
+        "Error Handling/Logging": "",
+        "Data Inputs": "",
+        "Data Outputs": ""
+    }
+
+
+def is_response_incomplete(response: str) -> bool:
+    print("Calling is_response_incomplete() function...")
+    print(f"Analyzing response: {response}")
+
+    # Remove newline characters and white spaces outside of string values
+    response = re.sub(r'(?<=\})\s+|\s+(?=\{)', '', response)
+
+    if not response:
+        return False
+
+    # Check if the response is missing a closing curly brace
+    if response[-1] != '}':
+        return True
+
+    # Check if the response has an equal number of opening and closing curly braces
+    if response.count('{') != response.count('}'):
+        return True
+
+    return False

@@ -3,7 +3,7 @@ import os
 from generate_commented_code import generate_commented_code
 
 if __name__ == "__main__":
-    repo_url = "https://github.com/benjamesmurray/repo-crawler"
+    repo_url = "https://github.com/department-for-transport-BODS/bods"
 
     # Use os.path.join to create platform-independent paths
     base_path = os.path.expanduser(os.path.join("~", "PycharmProjects", "github-crawler"))
